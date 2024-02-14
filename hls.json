@@ -1,0 +1,16 @@
+{
+  "haskell": {
+    "checkParents": "CheckOnSave",
+    "checkProject": true,
+    "formattingProvider": "ormolu",
+    "maxCompletions": 40,
+    "plugin": {
+      "gadt": {
+        "globalOn": false
+      },
+      "stan": {
+        "globalOn": false
+      }
+    }
+  }
+}
