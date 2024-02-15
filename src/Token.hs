@@ -4,12 +4,26 @@
 
 module Token (expr) where
 
+import Control.Monad (void)
+import Control.Monad.Combinators (skipCount)
 import Control.Monad.Combinators.Expr (Operator (InfixL, Prefix), makeExprParser)
 import Data.Scientific (toRealFloat)
 import Data.Text (Text)
 import Data.Void (Void)
-import Text.Megaparsec (Parsec, between, (<?>), (<|>), manyTill)
-import Text.Megaparsec.Char (space1, char)
+import Text.Megaparsec
+  ( MonadParsec (try),
+    Parsec,
+    anySingle,
+    between,
+    many,
+    manyTill,
+    notFollowedBy,
+    skipManyTill,
+    takeWhileP,
+    (<?>),
+    (<|>),
+  )
+import Text.Megaparsec.Char (char, space1, string)
 import qualified Text.Megaparsec.Char.Lexer as L
 
 -- data Expr = NumberExp Double
@@ -20,22 +34,6 @@ import qualified Text.Megaparsec.Char.Lexer as L
 --           | TableExp [(String, Expr)]
 --           | FieldSep
 --           deriving (Show, Eq)
-
--- tokenizer =
---   P.makeTokenParser
---     LanguageDef
---       { commentStart = "--[[",
---         commentEnd = "]]",
---         commentLine = "--",
---         nestedComments = False,
---         identStart = letter <|> char '_',
---         identLetter = alphaNum <|> char '_',
---         opStart = oneOf ":!#$%&*+./<=>?@\\^|-~",
---         opLetter = oneOf ":!#$%&*+./<=>?@\\^|-~",
---         reservedNames = [],
---         reservedOpNames = [],
---         caseSensitive = True
---       }
 
 -- chunk ::= {stat [`;´]} [laststat[`;´]]
 -- block ::= chunk
@@ -58,12 +56,13 @@ import qualified Text.Megaparsec.Char.Lexer as L
 -- explist1 ::= {exp `,´} exp
 -- exp ::=  nil  |  false  |  true  |  Number  |  String  |  `...´  |
 --          function  |  prefixexp  |  tableconstructor  |  exp binop exp  |  unop exp
+
 data Expr
   = Nil
   | BoolExpr Bool
   | NumExpr Double
   | StrExpr String
-  | ThreeDots
+  | VarArgsExpr -- ...
   | BinOpExpr Expr BinOp Expr
   | UnOpExpr UnOp Expr
   deriving (Show, Eq)
@@ -109,7 +108,7 @@ type Parser = Parsec Void Text
 
 -- space consumer
 sc :: Parser ()
-sc = L.space space1 (L.skipLineComment "--") (L.skipBlockComment "--[[" "]]")
+sc = L.space space1 skipLineComment skipLuaBlockComment
 
 -- parse a token followed by space
 lexeme :: Parser a -> Parser a
@@ -119,27 +118,65 @@ lexeme = L.lexeme sc
 symbol :: Text -> Parser Text
 symbol = L.symbol sc
 
+-- match lua comment blocks --[=[ ]=] and string blocks [=[ ]=] with matching number of equals
+luaBlock :: Text -> (Parser () -> Parser a) -> Parser a
+luaBlock prefix bodyTill = do
+  _ <- string prefix
+  n <- try start
+  bodyTill (try $ end n)
+  where
+    start = do
+      _ <- char '['
+      n <- length <$> many (char '=')
+      _ <- char '['
+      return n
+    end n = void $ char ']' >> skipCount n (char '=') >> char ']'
+
+skipLuaBlockComment :: Parser ()
+skipLuaBlockComment = luaBlock "--" (skipManyTill anySingle)
+
+skipLineComment :: Parser ()
+skipLineComment = do
+  _ <- try $ char '-' <* char '-' <* notFollowedBy (char '[')
+  _ <- takeWhileP (Just "character") (/= '\n')
+  return ()
+
+-- string literals
+stringLit :: Parser String
+stringLit = lexeme (singleLine '"') <|> lexeme (singleLine '\'') <|> lexeme multiLine
+  where
+    singleLine q = char q >> manyTill (L.charLiteral <* notFollowedBy (char '\n')) (char q)
+    multiLine = removeFirstNewline <$> luaBlock "" (manyTill L.charLiteral)
+    removeFirstNewline [] = ""
+    removeFirstNewline (x : xs) =
+      if x == '\n'
+        then xs
+        else x : xs
+
 -- lua numbers are always doubles
 number :: Parser Double
 number = fmap toRealFloat (lexeme L.scientific)
 
--- string literals
-string :: Parser String
-string = lexeme doubleQuotes <|> lexeme singleQuotes <|> lexeme multiLine
-  where
-    doubleQuotes = char '"' >> manyTill L.charLiteral (char '"')
-    singleQuotes = char '\'' >> manyTill L.charLiteral (char '\'')
-    multiLine = undefined -- TODO: implement multiline string
+boolean :: Parser Bool
+boolean = (False <$ lexeme "false") <|> (True <$ lexeme "true")
 
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
+varargs :: Parser Text
+varargs = lexeme "..."
+
 expr :: Parser Expr
 expr = makeExprParser term opTable <?> "expression"
   where
-    term = parens expr <|> numExpr <|> strExpr <?> "term"
+    term = parens expr <|> nilExpr <|> boolExpr <|> numExpr <|> strExpr <|> varArgsExpr <?> "term"
+    nilExpr = Nil <$ lexeme "nil"
+    boolExpr = fmap BoolExpr boolean
     numExpr = fmap NumExpr number
-    strExpr = fmap StrExpr string
+    strExpr = fmap StrExpr stringLit
+    varArgsExpr = VarArgsExpr <$ varargs
+    binary sym binop = InfixL ((`BinOpExpr` binop) <$ symbol sym)
+    unary sym unop = Prefix (UnOpExpr unop <$ symbol sym)
     opTable =
       [ [binary "^" Exp],
         [ unary "-" Neg,
@@ -165,5 +202,3 @@ expr = makeExprParser term opTable <?> "expression"
         ],
         [binary "or" Or]
       ]
-    binary sym binop = InfixL ((`BinOpExpr` binop) <$ symbol sym)
-    unary sym unop = Prefix (UnOpExpr unop <$ symbol sym)
