@@ -4,7 +4,8 @@
 module Main where
 
 -- import System.IO (IOMode (ReadMode), hClose, hGetContents, openFile)
-import Token (expr)
+import Token (lexer)
+import Parser (expr)
 import Text.Megaparsec (parseTest, MonadParsec (eof))
 import Text.RawString.QQ
 import Text.Printf (printf)
@@ -49,6 +50,8 @@ test = [r|1 + 2.2 +
 
 main :: IO ()
 main = do
+  printf test
+  parseTest (lexer <* eof) $ pack test
   parseTest (expr <* eof) $ pack test
   -- tokenizeFile "test/resources/learnlua.lua"
   printf "OK"

@@ -2,16 +2,18 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 
-module Token (expr) where
+module Token where
 
 import Control.Monad (void)
 import Control.Monad.Combinators (skipCount)
-import Control.Monad.Combinators.Expr (Operator (InfixL, Prefix), makeExprParser)
+import Data.Char (isAlphaNum)
+import Data.Functor ((<&>))
 import Data.Scientific (toRealFloat)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Void (Void)
 import Text.Megaparsec
-  ( MonadParsec (try),
+  ( MonadParsec (takeWhile1P),
     Parsec,
     anySingle,
     between,
@@ -20,71 +22,34 @@ import Text.Megaparsec
     notFollowedBy,
     skipManyTill,
     takeWhileP,
-    (<?>),
+    try,
     (<|>),
   )
-import Text.Megaparsec.Char (char, space1, string)
+import Text.Megaparsec.Char (char, digitChar, space1, string)
 import qualified Text.Megaparsec.Char.Lexer as L
 
--- data Expr = NumberExp Double
---           | StringExp String
---           | VarExp String
---           | BinOpExp String Expr Expr
---           | FunctionCallExp [Expr]
---           | TableExp [(String, Expr)]
---           | FieldSep
---           deriving (Show, Eq)
-
--- chunk ::= {stat [`;´]} [laststat[`;´]]
--- block ::= chunk
--- stat ::=  varlist1 `=´ explist1  |
---          functioncall  |
---          do block end  |
---          while exp do block end  |
---          repeat block until exp  |
---          if exp then block {elseif exp then block} [else block] end  |
---          for Name `=´ exp `,´ exp [`,´ exp] do block end  |
---          for namelist in explist1 do block end  |
---          function funcname funcbody  |
---          local function Name funcbody  |
---          local namelist [`=´ explist1]
--- laststat ::= return [explist1]  |  break
--- funcname ::= Name {`.´ Name} [`:´ Name]
--- varlist1 ::= var {`,´ var}
--- var ::=  Name  |  prefixexp `[´ exp `]´  |  prefixexp `.´ Name
--- namelist ::= Name {`,´ Name}
--- explist1 ::= {exp `,´} exp
--- exp ::=  nil  |  false  |  true  |  Number  |  String  |  `...´  |
---          function  |  prefixexp  |  tableconstructor  |  exp binop exp  |  unop exp
-
-data Expr
+data Token
   = Nil
-  | BoolExpr Bool
-  | NumExpr Double
-  | StrExpr String
-  | VarArgsExpr -- ...
-  | BinOpExpr Expr BinOp Expr
-  | UnOpExpr UnOp Expr
-  deriving (Show, Eq)
-
--- function
--- prefixexp
--- tableconstructor
-
--- prefixexp ::= var  |  functioncall  |  `(´ exp `)´
--- functioncall ::=  prefixexp args  |  prefixexp `:´ Name args
--- args ::=  `(´ [explist1] `)´  |  tableconstructor  |  String
--- function ::= function funcbody
--- funcbody ::= `(´ [parlist1] `)´ block end
--- parlist1 ::= namelist [`,´ `...´]  |  `...´
--- tableconstructor ::= `{´ [fieldlist] `}´
--- fieldlist ::= field {fieldsep field} [fieldsep]
--- field ::= `[´ exp `]´ `=´ exp  |  Name `=´ exp  |  exp
--- fieldsep ::= `,´  |  `;´
-
-data BinOp
-  = Add
-  | Sub
+  | TrueLit
+  | FalseLit
+  | Function
+  | Do
+  | End
+  | If
+  | Then
+  | Elseif
+  | Else
+  | While
+  | Repeat
+  | Until
+  | For
+  | Local
+  | In
+  | Return
+  | Break
+  | Assign
+  | Plus
+  | Minus
   | Mul
   | Div
   | Exp
@@ -98,28 +63,35 @@ data BinOp
   | Neq
   | And
   | Or
-  deriving (Show, Eq)
+  | Not
+  | VarArgs
+  | Len
+  | SqOpen
+  | SqClose
+  | ParenOpen
+  | ParenClose
+  | FieldSep
+  | Name String
+  | NumberLit Double
+  | StringLit String
+  deriving (Eq, Show)
 
-data UnOp = Neg | Not | Hash
-  deriving (Show, Eq)
-
--- parser functions
-type Parser = Parsec Void Text
+type Lexer = Parsec Void Text
 
 -- space consumer
-sc :: Parser ()
+sc :: Lexer ()
 sc = L.space space1 skipLineComment skipLuaBlockComment
 
 -- parse a token followed by space
-lexeme :: Parser a -> Parser a
+lexeme :: Lexer a -> Lexer a
 lexeme = L.lexeme sc
 
 -- parse a fixed symbol
-symbol :: Text -> Parser Text
+symbol :: Text -> Lexer Text
 symbol = L.symbol sc
 
 -- match lua comment blocks --[=[ ]=] and string blocks [=[ ]=] with matching number of equals
-luaBlock :: Text -> (Parser () -> Parser a) -> Parser a
+luaBlock :: Text -> (Lexer () -> Lexer a) -> Lexer a
 luaBlock prefix bodyTill = do
   _ <- string prefix
   n <- try start
@@ -132,17 +104,17 @@ luaBlock prefix bodyTill = do
       return n
     end n = void $ char ']' >> skipCount n (char '=') >> char ']'
 
-skipLuaBlockComment :: Parser ()
+skipLuaBlockComment :: Lexer ()
 skipLuaBlockComment = luaBlock "--" (skipManyTill anySingle)
 
-skipLineComment :: Parser ()
+skipLineComment :: Lexer ()
 skipLineComment = do
   _ <- try $ char '-' <* char '-' <* notFollowedBy (char '[')
   _ <- takeWhileP (Just "character") (/= '\n')
   return ()
 
 -- string literals
-stringLit :: Parser String
+stringLit :: Lexer String
 stringLit = lexeme (singleLine '"') <|> lexeme (singleLine '\'') <|> lexeme multiLine
   where
     singleLine q = char q >> manyTill (L.charLiteral <* notFollowedBy (char '\n')) (char q)
@@ -154,51 +126,84 @@ stringLit = lexeme (singleLine '"') <|> lexeme (singleLine '\'') <|> lexeme mult
         else x : xs
 
 -- lua numbers are always doubles
-number :: Parser Double
+number :: Lexer Double
 number = fmap toRealFloat (lexeme L.scientific)
 
-boolean :: Parser Bool
+boolean :: Lexer Bool
 boolean = (False <$ lexeme "false") <|> (True <$ lexeme "true")
 
-parens :: Parser a -> Parser a
+parens :: Lexer a -> Lexer a
 parens = between (symbol "(") (symbol ")")
 
-varargs :: Parser Text
+brackets :: Lexer a -> Lexer a
+brackets = between (symbol "[") (symbol "]")
+
+varargs :: Lexer Text
 varargs = lexeme "..."
 
-expr :: Parser Expr
-expr = makeExprParser term opTable <?> "expression"
+fieldsep :: Lexer ()
+fieldsep = void $ lexeme (char ',') <|> lexeme (char ';')
+
+-- letters, digits, underscore, not starting with digit
+name :: Lexer String
+name =
+  notFollowedBy digitChar
+    *> lexeme (takeWhile1P (Just "name") isAlphaNumDash)
+    <&> T.unpack
   where
-    term = parens expr <|> nilExpr <|> boolExpr <|> numExpr <|> strExpr <|> varArgsExpr <?> "term"
-    nilExpr = Nil <$ lexeme "nil"
-    boolExpr = fmap BoolExpr boolean
-    numExpr = fmap NumExpr number
-    strExpr = fmap StrExpr stringLit
-    varArgsExpr = VarArgsExpr <$ varargs
-    binary sym binop = InfixL ((`BinOpExpr` binop) <$ symbol sym)
-    unary sym unop = Prefix (UnOpExpr unop <$ symbol sym)
-    opTable =
-      [ [binary "^" Exp],
-        [ unary "-" Neg,
-          unary "not" Not,
-          unary "#" Hash
-        ],
-        [ binary "*" Mul,
-          binary "/" Div,
-          binary "%" Mod
-        ],
-        [ binary "+" Add,
-          binary "-" Sub
-        ],
-        [binary ".." Concat],
-        [ binary "<" Lt,
-          binary ">" Gt,
-          binary "<=" Lte,
-          binary ">=" Gte,
-          binary "~=" Neq,
-          binary "==" Eq
-        ],
-        [ binary "and" And
-        ],
-        [binary "or" Or]
-      ]
+    isAlphaNumDash a = isAlphaNum a || a == '_'
+
+lexer :: Lexer [Token]
+lexer =
+  many $
+    fmap StringLit stringLit
+      <|> fmap NumberLit number
+      <|> foldl1
+        (<|>)
+        ( (\(s, t) -> symbol s >> pure t)
+            <$> [ ("nil", Nil),
+                  ("true", TrueLit),
+                  ("false", FalseLit),
+                  ("function", Function),
+                  ("do", Do),
+                  ("end", End),
+                  ("if", If),
+                  ("then", Then),
+                  ("elseif", Elseif),
+                  ("else", Else),
+                  ("while", While),
+                  ("repeat", Repeat),
+                  ("until", Until),
+                  ("for", For),
+                  ("local", Local),
+                  ("in", In),
+                  ("return", Return),
+                  ("break", Break),
+                  ("=", Assign),
+                  ("+", Plus),
+                  ("-", Minus),
+                  ("*", Mul),
+                  ("/", Div),
+                  ("^", Exp),
+                  ("%", Mod),
+                  ("..", Concat),
+                  ("<", Lt),
+                  ("<=", Lte),
+                  (">", Gt),
+                  (">=", Gte),
+                  ("==", Eq),
+                  ("~=", Neq),
+                  ("and", And),
+                  ("or", Or),
+                  ("not", Not),
+                  ("#", Len),
+                  ("...", VarArgs),
+                  ("[", SqOpen),
+                  ("]", SqClose),
+                  ("(", ParenOpen),
+                  (")", ParenClose),
+                  (",", FieldSep),
+                  (";", FieldSep)
+                ]
+        )
+      <|> fmap Name name
