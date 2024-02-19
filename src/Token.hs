@@ -8,7 +8,7 @@ import Control.Monad (void)
 import Control.Monad.Combinators (skipCount)
 import Data.Char (isAlphaNum)
 import Data.Functor ((<&>))
-import Data.Scientific (toRealFloat)
+import Data.Scientific (toRealFloat, Scientific)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void (Void)
@@ -27,54 +27,6 @@ import Text.Megaparsec
   )
 import Text.Megaparsec.Char (char, digitChar, space1, string)
 import qualified Text.Megaparsec.Char.Lexer as L
-
-data Token
-  = Nil
-  | TrueLit
-  | FalseLit
-  | Function
-  | Do
-  | End
-  | If
-  | Then
-  | Elseif
-  | Else
-  | While
-  | Repeat
-  | Until
-  | For
-  | Local
-  | In
-  | Return
-  | Break
-  | Assign
-  | Plus
-  | Minus
-  | Mul
-  | Div
-  | Exp
-  | Mod
-  | Concat
-  | Lt
-  | Lte
-  | Gt
-  | Gte
-  | Eq
-  | Neq
-  | And
-  | Or
-  | Not
-  | VarArgs
-  | Len
-  | SqOpen
-  | SqClose
-  | ParenOpen
-  | ParenClose
-  | FieldSep
-  | Name String
-  | NumberLit Double
-  | StringLit String
-  deriving (Eq, Show)
 
 type Lexer = Parsec Void Text
 
@@ -125,9 +77,8 @@ stringLit = lexeme (singleLine '"') <|> lexeme (singleLine '\'') <|> lexeme mult
         then xs
         else x : xs
 
--- lua numbers are always doubles
-number :: Lexer Double
-number = fmap toRealFloat (lexeme L.scientific)
+number :: Lexer Scientific
+number = lexeme L.scientific
 
 boolean :: Lexer Bool
 boolean = (False <$ lexeme "false") <|> (True <$ lexeme "true")
@@ -178,58 +129,3 @@ reservedKeywords =
     "or",
     "not"
   ]
-
-lexer :: Lexer [Token]
-lexer =
-  many $
-    fmap StringLit stringLit
-      <|> fmap NumberLit number
-      <|> foldl1
-        (<|>)
-        ( (\(s, t) -> symbol s >> pure t)
-            <$> [ ("nil", Nil),
-                  ("true", TrueLit),
-                  ("false", FalseLit),
-                  ("function", Function),
-                  ("do", Do),
-                  ("end", End),
-                  ("if", If),
-                  ("then", Then),
-                  ("elseif", Elseif),
-                  ("else", Else),
-                  ("while", While),
-                  ("repeat", Repeat),
-                  ("until", Until),
-                  ("for", For),
-                  ("local", Local),
-                  ("in", In),
-                  ("return", Return),
-                  ("break", Break),
-                  ("=", Assign),
-                  ("+", Plus),
-                  ("-", Minus),
-                  ("*", Mul),
-                  ("/", Div),
-                  ("^", Exp),
-                  ("%", Mod),
-                  ("..", Concat),
-                  ("<", Lt),
-                  ("<=", Lte),
-                  (">", Gt),
-                  (">=", Gte),
-                  ("==", Eq),
-                  ("~=", Neq),
-                  ("and", And),
-                  ("or", Or),
-                  ("not", Not),
-                  ("#", Len),
-                  ("...", VarArgs),
-                  ("[", SqOpen),
-                  ("]", SqClose),
-                  ("(", ParenOpen),
-                  (")", ParenClose),
-                  (",", FieldSep),
-                  (";", FieldSep)
-                ]
-        )
-      <|> fmap Name identifier

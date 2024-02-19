@@ -7,9 +7,12 @@ module Parser where
 import Control.Monad (void)
 import Control.Monad.Combinators (some)
 import Control.Monad.Combinators.Expr (Operator (InfixL, Postfix, Prefix), makeExprParser)
+import Data.Functor ((<&>))
+import Data.Int (Int64)
 import Data.List (singleton)
 import Data.List.NonEmpty (NonEmpty, fromList)
 import Data.Maybe (fromMaybe, isJust)
+import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void (Void)
@@ -221,7 +224,11 @@ block = dbg "block" $ many (stmt <* optional (symbol ";"))
 -- exp ::=  nil  |  false  |  true  |  Number  |  String  |  `...´  |
 --          function  |  prefixexp  |  tableconstructor  |  exp binop exp  |  unop exp
 data Expr
-  = ValueExpr Value
+  = NilExpr
+  | BoolExpr Bool
+  | IntExpr Int64
+  | FloatExpr Double
+  | StrExpr String
   | VarArgsExpr
   | VarExpr Var
   | FuncExpr Function
@@ -229,13 +236,6 @@ data Expr
   | TableConsExpr TableCons
   | BinOpExpr BinOp Expr Expr
   | UnOpExpr UnOp Expr
-  deriving (Show, Eq)
-
-data Value
-  = NilValue
-  | BoolValue Bool
-  | NumValue Double
-  | StrValue String
   deriving (Show, Eq)
 
 data BinOp
@@ -287,10 +287,13 @@ expr = makeExprParser term opTable <?> "expression"
         ]
         <?> "term"
 
-    nilExpr = ValueExpr NilValue <$ symbol "nil"
-    boolExpr = ValueExpr . BoolValue <$> boolean
-    numExpr = ValueExpr . NumValue <$> number
-    strExpr = ValueExpr . StrValue <$> stringLit
+    nilExpr = NilExpr <$ symbol "nil"
+    boolExpr = BoolExpr <$> boolean
+    numExpr =
+      number <&> \n -> case floatingOrInteger n of
+        Left r -> FloatExpr r
+        Right i -> IntExpr i
+    strExpr = StrExpr <$> stringLit
     varArgsExpr = VarArgsExpr <$ varargs
     functionExpr = FuncExpr <$> (symbol "function" >> funcbody)
     tableConsExpr = TableConsExpr <$> tablecons
@@ -360,17 +363,9 @@ prefixExpr = makeExprParser term opTable <?> "prefix expr"
       args <- args
       return \prefix -> FnCallExpr $ FnCall prefix method args
     args =
-      parens
-        exprlist
-        <|> ( singleton
-                . TableConsExpr
-                <$> tablecons
-            )
-        <|> ( singleton
-                . ValueExpr
-                . StrValue
-                <$> stringLit
-            )
+      parens exprlist
+        <|> (singleton . TableConsExpr <$> tablecons)
+        <|> (singleton . StrExpr <$> stringLit)
 
 data Var
   = VarName Name
