@@ -9,8 +9,8 @@ interpreters using Haskell.
 
 ## Grammar and Parsing
 
-Parsing is done using [megaparsec](https://hackage.haskell.org/package/megaparsec).
-Lexing is done during parsing using megaparsec's
+Parsing is done using [megaparsec](https://hackage.haskell.org/package/megaparsec)'s parser
+combinators. Lexing is done during parsing using megaparsec's lexing helper functions.
 
 ```
 chunk ::= block
