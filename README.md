@@ -102,5 +102,6 @@ TBD
 ## References
 
 - Megaparsec: https://hackage.haskell.org/package/megaparsec
-- Megaparsec tutorial: https://markkarpov.com/tutorial/megaparsec.html
+- Mark Karpov (megaparsec's author) megaparsec tutorial: https://markkarpov.com/tutorial/megaparsec.html
+- Joseph Morag's tutorial on parsing Micro C using megaparsec: https://blog.josephmorag.com/posts/mcc1/#headline-4
 - Lua source code: https://www.lua.org/source/5.4/
