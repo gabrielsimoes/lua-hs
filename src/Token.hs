@@ -110,14 +110,14 @@ skipLuaBlockComment = luaBlock "--" (skipManyTill anySingle)
 skipLineComment :: Lexer ()
 skipLineComment = do
   _ <- try $ char '-' <* char '-' <* notFollowedBy (char '[')
-  _ <- takeWhileP (Just "character") (/= '\n')
+  _ <- takeWhileP (Just "any character") (/= '\n')
   return ()
 
 -- string literals
 stringLit :: Lexer String
 stringLit = lexeme (singleLine '"') <|> lexeme (singleLine '\'') <|> lexeme multiLine
   where
-    singleLine q = char q >> manyTill (L.charLiteral <* notFollowedBy (char '\n')) (char q)
+    singleLine q = char q >> manyTill (notFollowedBy (char '\n') *> L.charLiteral) (char q)
     multiLine = removeFirstNewline <$> luaBlock "" (manyTill L.charLiteral)
     removeFirstNewline [] = ""
     removeFirstNewline (x : xs) =
@@ -132,26 +132,52 @@ number = fmap toRealFloat (lexeme L.scientific)
 boolean :: Lexer Bool
 boolean = (False <$ lexeme "false") <|> (True <$ lexeme "true")
 
-parens :: Lexer a -> Lexer a
+parens, squareBrackets, curlyBrackets :: Lexer a -> Lexer a
 parens = between (symbol "(") (symbol ")")
+squareBrackets = between (symbol "[") (symbol "]")
+curlyBrackets = between (symbol "{") (symbol "}")
 
-brackets :: Lexer a -> Lexer a
-brackets = between (symbol "[") (symbol "]")
-
-varargs :: Lexer Text
-varargs = lexeme "..."
+varargs :: Lexer ()
+varargs = void $ lexeme "..."
 
 fieldsep :: Lexer ()
 fieldsep = void $ lexeme (char ',') <|> lexeme (char ';')
 
 -- letters, digits, underscore, not starting with digit
-name :: Lexer String
-name =
-  notFollowedBy digitChar
-    *> lexeme (takeWhile1P (Just "name") isAlphaNumDash)
-    <&> T.unpack
+identifier :: Lexer String
+identifier = notFollowedBy digitChar *> (lexeme . try) (id >>= notReserved) <&> T.unpack
   where
+    id = takeWhile1P (Just "name character") isAlphaNumDash
     isAlphaNumDash a = isAlphaNum a || a == '_'
+    notReserved w =
+      if w `elem` reservedKeywords
+        then fail $ "keyword " <> show w <> " cannot be a name"
+        else return w
+
+reservedKeywords :: [Text]
+reservedKeywords =
+  [ "nil",
+    "true",
+    "false",
+    "function",
+    "do",
+    "end",
+    "if",
+    "then",
+    "elseif",
+    "else",
+    "while",
+    "repeat",
+    "until",
+    "for",
+    "local",
+    "in",
+    "return",
+    "break",
+    "and",
+    "or",
+    "not"
+  ]
 
 lexer :: Lexer [Token]
 lexer =
@@ -206,4 +232,4 @@ lexer =
                   (";", FieldSep)
                 ]
         )
-      <|> fmap Name name
+      <|> fmap Name identifier
