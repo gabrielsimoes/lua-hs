@@ -94,6 +94,6 @@ main = do
   -- printf "\n"
   -- parseTest (expr <* eof) $ pack test
   -- parseTest (program <* eof) $ pack test2
-  parseFile (dbg "dbg" (block <* eof)) "test/resources/learnlua.lua"
+  parseFile (dbg "dbg" (block <* eof)) "test/learnlua-x-in-y.lua"
   -- printf "OK"
 

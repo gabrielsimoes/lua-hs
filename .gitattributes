@@ -1,0 +1,3 @@
+test/learnlua-x-in-y.lua linguist-vendored
+test/lua-5.4.6-tests/** linguist-vendored
+
