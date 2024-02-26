@@ -20,7 +20,9 @@ library
         text,
         megaparsec,
         parser-combinators,
-        scientific
+        scientific,
+        FloatingHex,
+        bytestring
     hs-source-dirs: src
 
 executable lua-hs
@@ -40,5 +42,6 @@ test-suite lua-hs-test
         base,
         text,
         megaparsec,
-        raw-strings-qq,
+        directory,
+        filepath,
         lua-hs

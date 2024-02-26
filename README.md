@@ -104,4 +104,5 @@ TBD
 - Megaparsec: https://hackage.haskell.org/package/megaparsec
 - Mark Karpov (megaparsec's author) megaparsec tutorial: https://markkarpov.com/tutorial/megaparsec.html
 - Joseph Morag's tutorial on parsing Micro C using megaparsec: https://blog.josephmorag.com/posts/mcc1/#headline-4
+- StackOverflow answer on dealing with exponents and unary prefix in megaparsec: https://stackoverflow.com/a/52115160
 - Lua source code: https://www.lua.org/source/5.4/

@@ -6,11 +6,11 @@ module Parser where
 
 import Control.Monad (void)
 import Control.Monad.Combinators (some)
-import Control.Monad.Combinators.Expr (Operator (InfixL, Postfix, Prefix), makeExprParser)
+import Control.Monad.Combinators.Expr (Operator (InfixL, InfixR, Postfix, Prefix), makeExprParser)
 import Data.Functor ((<&>))
 import Data.Int (Int64)
 import Data.List (singleton)
-import Data.List.NonEmpty (NonEmpty, fromList)
+import Data.List.NonEmpty (NonEmpty, fromList, toList)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
@@ -18,10 +18,14 @@ import qualified Data.Text as T
 import Data.Void (Void)
 import Text.Megaparsec
   ( ErrorItem (Label),
-    MonadParsec (notFollowedBy),
     Parsec,
+    between,
+    choice,
+    eof,
     many,
+    notFollowedBy,
     oneOf,
+    option,
     optional,
     satisfy,
     sepBy,
@@ -33,7 +37,7 @@ import Text.Megaparsec
     (<|>),
   )
 import Text.Megaparsec.Char (char, string)
-import Text.Megaparsec.Debug (dbg, dbg')
+import qualified Text.Megaparsec.Debug as D (dbg, dbg')
 import Token
   ( boolean,
     curlyBrackets,
@@ -48,17 +52,13 @@ import Token
     varargs,
   )
 import qualified Token
+import Data.ByteString.Char8 (ByteString)
 
+-- parse over text tokens
 type Parser = Parsec Void Text
 
-(>*<) :: Parser a -> Parser b -> Parser (a, b)
-pa >*< pb = do
-  a <- pa
-  b <- pb
-  return (a, b)
-
-program :: Parser [Stmt]
-program = sc >> block
+program :: Parser [Stat]
+program = sc >> block <* eof
 
 -- name
 newtype Name = Name String
@@ -67,7 +67,7 @@ newtype Name = Name String
 name :: Parser Name
 name = Name <$> identifier
 
--- funcname ::= Name {`.´ Name} [`:´ Name]
+-- funcname ::= Name {‘.’ Name} [‘:’ Name]
 data FuncName = FuncName (NonEmpty Name) (Maybe Name)
   deriving (Show, Eq)
 
@@ -77,78 +77,114 @@ funcname = do
   method <- optional $ symbol ":" >> name
   return $ FuncName (fromList names) method
 
--- namelist ::= Name {`,´ Name}
-namelist = sepBy name (symbol ",") <?> "namelist"
-
-namelist1 = sepBy1 name (symbol ",") <?> "namelist1"
-
--- varlist1 ::= var {`,´ var}
-varlist1 = sepBy1 var (symbol ",") <?> "varlist1"
-
--- explist1 ::= {exp `,´} exp
-exprlist = sepBy expr (symbol ",") <?> "exprlist"
-
-exprlist1 = sepBy1 expr (symbol ",") <?> "exprlist1"
-
--- stat ::=  varlist1 `=´ explist1  |
---          functioncall  |
---          do block end  |
---          while exp do block end  |
---          repeat block until exp  |
---          if exp then block {elseif exp then block} [else block] end  |
---          for Name `=´ exp `,´ exp [`,´ exp] do block end  |
---          for namelist in explist1 do block end  |
---          function funcname funcbody  |
---          local function Name funcbody  |
---          local namelist [`=´ explist1]
-
-data Stmt
-  = AssignStmt [Var] [Expr]
-  | FnCallStmt FnCall
-  | BlockStmt [Stmt]
-  | WhileDoStmt Expr [Stmt]
-  | RepeatUntilStmt [Stmt] Expr
-  | ConditionalStmt [(Expr, [Stmt])] [Stmt]
-  | ForListStmt Name [Expr] [Stmt]
-  | ForRangeStmt [Name] [Expr] [Stmt]
-  | FunctionStmt FuncName Function
-  | LocalFunctionStmt Name Function
-  | LocalAssignStmt [Name] [Expr]
-  | ReturnStmt [Expr]
-  | BreakStmt
+-- attnamelist ::=  Name attrib {‘,’ Name attrib}
+-- attrib ::= [‘<’ Name ‘>’]
+data AttName = AttName Name (Maybe Name)
   deriving (Show, Eq)
 
-stmt :: Parser Stmt
-stmt =
+attname :: Parser AttName
+attname = liftA2 AttName name (optional $ between (symbol "<") (symbol ">") name)
+
+attnamelist1 :: Parser (NonEmpty AttName)
+attnamelist1 = fromList <$> sepBy1 attname (symbol ",")
+
+-- namelist ::= Name {‘,’ Name}
+namelist :: Parser [Name]
+namelist = sepBy name (try $ symbol "," <* notFollowedBy (symbol "...")) <?> "namelist"
+
+namelist1 :: Parser (NonEmpty Name)
+namelist1 = fromList <$> sepBy1 name (symbol ",") <?> "namelist1"
+
+-- varlist ::= var {‘,’ var}
+varlist1 :: Parser (NonEmpty Var)
+varlist1 = fromList <$> sepBy1 var (symbol ",") <?> "varlist1"
+
+-- explist ::= exp {‘,’ exp}
+exprlist :: Parser [Expr]
+exprlist = sepBy expr (symbol ",") <?> "exprlist"
+
+exprlist1 :: Parser (NonEmpty Expr)
+exprlist1 = fromList <$> sepBy1 expr (symbol ",") <?> "exprlist1"
+
+-- stat ::=  ‘;’ |
+--           varlist ‘=’ explist |
+--           functioncall |
+--           label |
+--           break |
+--           goto Name |
+--           do block end |
+--           while exp do block end |
+--           repeat block until exp |
+--           if exp then block {elseif exp then block} [else block] end |
+--           for Name ‘=’ exp ‘,’ exp [‘,’ exp] do block end |
+--           for namelist in explist do block end |
+--           function funcname funcbody |
+--           local function Name funcbody |
+--           local attnamelist [‘=’ explist]
+-- label ::= ‘::’ Name ‘::’
+data Stat
+  = AssignStat (NonEmpty Var) (NonEmpty Expr)
+  | FnCallStat FnCall
+  | BlockStat [Stat]
+  | WhileDoStat Expr [Stat]
+  | RepeatUntilStat [Stat] Expr
+  | ConditionalStat [(Expr, [Stat])] [Stat]
+  | ForListStat Name (NonEmpty Expr) [Stat]
+  | ForRangeStat (NonEmpty Name) (NonEmpty Expr) [Stat]
+  | FunctionStat FuncName Function
+  | LocalFunctionStat Name Function
+  | LocalAssignStat (NonEmpty AttName) [Expr]
+  | ReturnStat [Expr]
+  | BreakStat
+  | LabelStat Name
+  | GotoStat Name
+  deriving (Show, Eq)
+
+-- isDebugEnabled = True
+isDebugEnabled = False
+
+dbg :: (Show a) => String -> Parser a -> Parser a
+dbg = if isDebugEnabled then D.dbg else const id
+
+dbg' :: String -> Parser a -> Parser a
+dbg' = if isDebugEnabled then D.dbg' else const id
+
+stat :: Parser Stat
+stat =
   dbg
-    "stmt"
-    ( foldl1
-        (<|>)
-        [ whileDoStmt,
-          conditionalStmt,
-          try assignStmt,
-          try fnCallStmt,
-          blockStmt,
-          repeatUntilStmt,
-          forListStmt,
-          forRangeStmt,
-          functionStmt,
-          localStmt,
-          returnStmt,
-          breakStmt
+    "stat"
+    ( choice
+        [ labelStat,
+          gotoStat,
+          whileDoStat,
+          conditionalStat,
+          try assignStat,
+          try fnCallStat,
+          blockStat,
+          repeatUntilStat,
+          forListStat,
+          forRangeStat,
+          functionStat,
+          localStat,
+          returnStat,
+          breakStat
         ]
         <?> "statement"
     )
   where
-    assignStmt = dbg "assign stmt" $ do
+    assignStat = dbg "assign stat" $ do
       vars <- varlist1
       _ <- symbol "="
-      AssignStmt vars <$> exprlist1
-    fnCallStmt = dbg "fncall stmt" $ FnCallStmt <$> functioncall
-    blockStmt = dbg "block stmt" $ BlockStmt <$> (symbol "do" *> block <* symbol "end")
-    whileDoStmt = dbg "whiledo stmt" $ uncurry WhileDoStmt <$> (symbol "while" *> expr) >*< (symbol "do" *> block <* symbol "end")
-    repeatUntilStmt = dbg "repeatuntil stmt" $ uncurry RepeatUntilStmt <$> (symbol "repeat" *> block) >*< (symbol "until" *> expr)
-    conditionalStmt = dbg "conditional stmt" $ do
+      AssignStat vars <$> exprlist1
+    fnCallStat = dbg "fncall stat" $ FnCallStat <$> functioncall
+    blockStat = dbg "block stat" $ BlockStat <$> (symbol "do" *> block <* symbol "end")
+    whileDoStat =
+      dbg "whiledo stmt" $
+        liftA2 WhileDoStat (symbol "while" *> expr) (symbol "do" *> block <* symbol "end")
+    repeatUntilStat =
+      dbg "repeatuntil stmt" $
+        liftA2 RepeatUntilStat (symbol "repeat" *> block) (symbol "until" *> expr)
+    conditionalStat = dbg "conditional stmt" $ do
       _ <- dbg "if" $ symbol "if"
       cond1 <- expr
       _ <- dbg "then (if)" $ symbol "then"
@@ -159,42 +195,48 @@ stmt =
         _ <- dbg "then (elseif)" $ symbol "then"
         body <- block
         return (cond, body)
-      elseBody <- optional $ dbg "else" $ symbol "else" >> dbg "block (else)" block
+      elseBody <- option [] $ dbg "else" $ symbol "else" >> dbg "block (else)" block
       _ <- dbg "end (conditional)" $ symbol "end"
-      return $ ConditionalStmt ((cond1, body1) : elseifs) (fromMaybe [] elseBody)
-    forListStmt = dbg "forlist stmt" do
+      return $ ConditionalStat ((cond1, body1) : elseifs) elseBody
+    forListStat = dbg "forlist stmt" do
       name <- try (symbol "for" *> name <* symbol "=")
       exprs <- exprlist1
       _ <- symbol "do"
       body <- block
       _ <- symbol "end"
-      return $ ForListStmt name exprs body
-    forRangeStmt = dbg "forrange stmt" $ do
+      return $ ForListStat name exprs body
+    forRangeStat = dbg "forrange stmt" $ do
       names <- try (symbol "for" *> namelist1 <* symbol "in")
       exprs <- exprlist1
       _ <- symbol "do"
       body <- block
       _ <- symbol "end"
-      return $ ForRangeStmt names exprs body
-    functionStmt = dbg "function stmt" $ uncurry FunctionStmt <$> (symbol "function" *> funcname) >*< funcbody
-    localStmt = dbg "local stmt" $ do
+      return $ ForRangeStat names exprs body
+    functionStat =
+      dbg "function stmt" $
+        liftA2 FunctionStat (symbol "function" *> funcname) funcbody
+    localStat = dbg "local stmt" $ do
       _ <- symbol "local"
-      localFunctionStmt <|> localAssignStmt
-    localFunctionStmt =
+      localFunctionStat <|> localAssignStat
+    localFunctionStat =
       dbg "local function stmt" $
-        uncurry LocalFunctionStmt <$> (symbol "function" *> name >*< funcbody)
-    localAssignStmt = dbg "local assign stmt" $ do
+        liftA2 LocalFunctionStat (symbol "function" *> name) funcbody
+    localAssignStat = dbg "local assign stmt" $ do
       _ <- notFollowedBy $ symbol "function"
-      names <- namelist1
+      attnames <- attnamelist1
       exprs <- optional $ symbol "=" >> exprlist1
-      return $ LocalAssignStmt names (fromMaybe [] exprs)
-    returnStmt = dbg "return" $ ReturnStmt <$> (symbol "return" >> exprlist)
-    breakStmt = dbg "break" $ BreakStmt <$ symbol "break"
+      return $ LocalAssignStat attnames (maybe [] toList exprs)
+    returnStat = dbg "return" $ ReturnStat <$> (symbol "return" >> exprlist)
+    breakStat = dbg "break" $ BreakStat <$ symbol "break"
+    labelStat = dbg "label" $ LabelStat <$> (symbol "::" *> name <* symbol "::")
+    gotoStat = dbg "goto" $ GotoStat <$> (symbol "goto" *> name)
+
+-- label ::= ‘::’ Name ‘::’
 
 -- function ::= function funcbody
 -- funcbody ::= `(´ [parlist1] `)´ block end
 -- parlist1 ::= namelist [`,´ `...´]  |  `...´
-data Function = Function [Name] Bool [Stmt]
+data Function = Function [Name] Bool [Stat]
   deriving (Show, Eq)
 
 funcbody :: Parser Function
@@ -210,16 +252,13 @@ funcbody = do
   _ <- symbol ")"
   Function params hasVarargs <$> block <* symbol "end"
 
--- block ::= chunk
--- chunk ::= {stat [`;´]} [laststat[`;´]]
--- laststat ::= return [explist1]  |  break
-block :: Parser [Stmt]
-block = dbg "block" $ many (stmt <* optional (symbol ";"))
-
--- case last stmts of
---   ReturnStmt _ -> return stmts
---   BreakStmt -> return stmts
---   _ -> unexpected (Label $ fromList "Unexpected last statement")
+-- chunk ::= block
+-- block ::= {stat} [retstat]
+-- retstat ::= return [explist] [‘;’]
+block :: Parser [Stat]
+block = dbg "block" $ seps *> many (stat <* seps)
+  where
+    seps = many (symbol ";")
 
 -- exp ::=  nil  |  false  |  true  |  Number  |  String  |  `...´  |
 --          function  |  prefixexp  |  tableconstructor  |  exp binop exp  |  unop exp
@@ -228,7 +267,7 @@ data Expr
   | BoolExpr Bool
   | IntExpr Int64
   | FloatExpr Double
-  | StrExpr String
+  | StrExpr ByteString
   | VarArgsExpr
   | VarExpr Var
   | FuncExpr Function
@@ -270,12 +309,27 @@ data BinOp
 data UnOp = Neg | BitNot | Not | Len
   deriving (Show, Eq)
 
+-- exp ::=  nil | false | true | Numeral | LiteralString | ‘...’ | functiondef |
+--          prefixexp | tableconstructor | exp binop exp | unop exp
 expr :: Parser Expr
-expr = makeExprParser term opTable <?> "expression"
+expr = infixTerm
   where
+    infixTerm = makeExprParser prefixTerm infixOpTable <?> "expression"
+
+    -- handle repeated unary operators and exponentiation precendence
+    prefixTerm = do
+      prefixOps <- many $ choice prefixOpList
+      argument <- expoTerm
+      return $ foldr ($) argument prefixOps
+
+    -- exponentiation '^', right-associative
+    expoTerm = do 
+      lhs <- term
+      option lhs (BinOpExpr Exp lhs <$> (symbol "^" >> prefixTerm))
+
+    -- remaining expression types
     term =
-      foldl1
-        (<|>)
+      choice
         [ nilExpr,
           boolExpr,
           numExpr,
@@ -283,71 +337,93 @@ expr = makeExprParser term opTable <?> "expression"
           varArgsExpr,
           functionExpr,
           prefixExpr,
-          tableConsExpr
+          tableConstructorExpr
         ]
         <?> "term"
-
     nilExpr = NilExpr <$ symbol "nil"
     boolExpr = BoolExpr <$> boolean
-    numExpr =
-      number <&> \n -> case floatingOrInteger n of
-        Left r -> FloatExpr r
-        Right i -> IntExpr i
+    numExpr = either IntExpr FloatExpr <$> number
     strExpr = StrExpr <$> stringLit
     varArgsExpr = VarArgsExpr <$ varargs
     functionExpr = FuncExpr <$> (symbol "function" >> funcbody)
-    tableConsExpr = TableConsExpr <$> tablecons
+    tableConstructorExpr = TableConsExpr <$> tableconstructor
 
-    binary sym binop = InfixL (BinOpExpr binop <$ symbol sym)
-    unary sym unop = Prefix (UnOpExpr unop <$ symbol sym)
-    binary' sym notFollow binop = InfixL (BinOpExpr binop <$ lexeme (try $ string sym <* notFollowedBy notFollow))
-    unary' sym notFollow unop = Prefix (UnOpExpr unop <$ lexeme (try $ string sym <* notFollowedBy notFollow))
-    opTable =
-      [ [binary "^" Exp],
-        [ unary "-" Neg,
-          unary "not" Not,
-          unary' "~" (char '=') BitNot,
-          unary "#" Len
-        ],
-        [ binary "*" Mul,
-          binary' "/" (char '/') Div,
-          binary "//" FloorDiv,
-          binary "%" Mod
-        ],
-        [ binary "+" Add,
-          binary "-" Sub
-        ],
-        [binary' ".." (char '.') Concat],
-        [ binary "<<" BitRightShift,
-          binary ">>" BitLeftShift
-        ],
-        [binary "&" BitAnd],
-        [binary' "~" (char '=') BitXor],
-        [binary "|" BitOr],
-        [ binary' "<" (oneOf ['=', '<']) Lt,
-          binary' ">" (oneOf ['=', '>']) Gt,
-          binary "<=" Lte,
-          binary ">=" Gte,
-          binary "~=" Neq,
-          binary "==" Eq
-        ],
-        [ binary "and" And
-        ],
-        [binary "or" Or]
+    -- unop ::= ‘-’ | not | ‘#’ | ‘~’
+    -- binop ::= ‘+’ | ‘-’ | ‘*’ | ‘/’ | ‘//’ | ‘^’ | ‘%’ | ‘&’ | ‘~’ | ‘|’ | ‘>>’ | ‘<<’ | ‘..’ |
+    --           ‘<’ | ‘<=’ | ‘>’ | ‘>=’ | ‘==’ | ‘~=’ | and | or
+    prefixOpList :: [Parser (Expr -> Expr)]
+    prefixOpList =
+      [ unary' "-" "-" Neg,
+        unary "not" Not,
+        unary' "~" (char '=') BitNot,
+        unary "#" Len
       ]
+    infixOpTable :: [[Operator Parser Expr]]
+    infixOpTable =
+      [ [ infixL "*" Mul,
+          infixL' "/" (char '/') Div,
+          infixL "//" FloorDiv,
+          infixL "%" Mod
+        ],
+        [ infixL "+" Add,
+          infixL "-" Sub
+        ],
+        [infixR' ".." (char '.') Concat],
+        [ infixL "<<" BitRightShift,
+          infixL ">>" BitLeftShift
+        ],
+        [infixL "&" BitAnd],
+        [infixL' "~" (char '=') BitXor],
+        [infixL "|" BitOr],
+        [ infixL' "<" (oneOf ['=', '<']) Lt,
+          infixL' ">" (oneOf ['=', '>']) Gt,
+          infixL "<=" Lte,
+          infixL ">=" Gte,
+          infixL "~=" Neq,
+          infixL "==" Eq
+        ],
+        [ infixL "and" And
+        ],
+        [infixL "or" Or]
+      ]
+
+    unary sym unop =
+      -- (dbg' $ "unary " ++ T.unpack sym)
+        (UnOpExpr unop <$ symbol sym)
+    unary' sym notFollow unop =
+      -- (dbg' $ "unary' " ++ T.unpack sym)
+        (UnOpExpr unop <$ (lexeme . try) (string sym <* notFollowedBy notFollow))
+
+    infixL sym binop =
+      InfixL $
+        -- (dbg' $ "infixL " ++ T.unpack sym)
+          (BinOpExpr binop <$ symbol sym)
+    infixR sym binop =
+      InfixR $
+        -- (dbg' $ "infixR " ++ T.unpack sym)
+          (BinOpExpr binop <$ symbol sym)
+    infixL' sym notFollow binop =
+      InfixL $
+        -- (dbg' $ "infixL' " ++ T.unpack sym)
+          (BinOpExpr binop <$ (lexeme . try) (string sym <* notFollowedBy notFollow))
+    infixR' sym notFollow binop =
+      InfixL $
+        -- (dbg' $ "infixR' " ++ T.unpack sym)
+          (BinOpExpr binop <$ (lexeme . try) (string sym <* notFollowedBy notFollow))
 
 -- prefixexp ::= var  |  functioncall  |  `(´ exp `)´
 -- var ::=  Name  |  prefixexp `[´ exp `]´  |  prefixexp `.´ Name
 -- functioncall ::=  prefixexp args  |  prefixexp `:´ Name args
 -- args ::=  `(´ [explist1] `)´  |  tableconstructor  |  String
 prefixExpr :: Parser Expr
-prefixExpr = makeExprParser term opTable <?> "prefix expr"
+prefixExpr = dbg "prefixexpr" (makeExprParser term opTable <?> "prefix expr")
   where
     term :: Parser Expr
     term =
-      VarExpr . VarName
-        <$> name
-          <|> parens expr
+      dbg "prefixexpr term" $
+        VarExpr . VarName
+          <$> name
+            <|> parens expr
     opTable = [[suffixChain]]
     suffixChain :: Operator Parser Expr
     suffixChain = Postfix $ foldr1 (flip (.)) <$> some (subscript <|> member <|> functioncall)
@@ -355,16 +431,16 @@ prefixExpr = makeExprParser term opTable <?> "prefix expr"
       s <- squareBrackets expr
       return \prefix -> VarExpr $ VarSubs prefix s
     member = dbg' "member suffix" do
-      _ <- try $ char '.' <* notFollowedBy (char '.')
+      _ <- try $ symbol "." <* notFollowedBy (symbol ".")
       m <- name
       return \prefix -> VarExpr $ VarMember prefix m
     functioncall = dbg' "functioncall suffix" do
-      method <- optional $ symbol ":" >> name
+      method <- try $ optional $ symbol ":" >> name
       args <- args
       return \prefix -> FnCallExpr $ FnCall prefix method args
     args =
       parens exprlist
-        <|> (singleton . TableConsExpr <$> tablecons)
+        <|> (singleton . TableConsExpr <$> tableconstructor)
         <|> (singleton . StrExpr <$> stringLit)
 
 data Var
@@ -390,23 +466,24 @@ functioncall = dbg "functioncall" $ do
     FnCallExpr fnCall -> return fnCall
     _ -> unexpected (Label $ fromList "expression")
 
--- tableconstructor ::= `{´ [fieldlist] `}´
--- fieldlist ::= field {fieldsep field} [fieldsep]
--- fieldsep ::= `,´  |  `;´
--- field ::= `[´ exp `]´ `=´ exp  |  Name `=´ exp  |  exp
 newtype TableCons = TableCons [Field]
   deriving (Show, Eq)
 
 data Field
-  = FieldAssignExpr Expr Expr
-  | FieldAssignName Name Expr
-  | FieldExpr Expr
+  = FieldAssignExpr Expr Expr -- [expr] = expr
+  | FieldAssignName Name Expr -- name = expr
+  | FieldExpr Expr -- expr
   deriving (Show, Eq)
 
-tablecons :: Parser TableCons
-tablecons = curlyBrackets (TableCons <$> sepEndBy field fieldsep) <?> "table constructor"
+-- tableconstructor ::= ‘{’ [fieldlist] ‘}’
+-- fieldlist ::= field {fieldsep field} [fieldsep]
+tableconstructor :: Parser TableCons
+tableconstructor = curlyBrackets (TableCons <$> sepEndBy field fieldsep) <?> "table constructor"
   where
+    -- fieldsep ::= ‘,’ | ‘;’
     fieldsep = lexeme $ satisfy (\c -> c == ',' || c == ';')
+
+    -- field ::= ‘[’ exp ‘]’ ‘=’ exp | Name ‘=’ exp | exp
     field :: Parser Field
     field = fieldAssignExpr <|> fieldAssignName <|> fieldExpr
     fieldAssignExpr =
