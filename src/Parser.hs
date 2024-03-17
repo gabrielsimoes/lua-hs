@@ -1,6 +1,7 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Parser where
 
@@ -323,7 +324,7 @@ expr = infixTerm
       return $ foldr ($) argument prefixOps
 
     -- exponentiation '^', right-associative
-    expoTerm = do 
+    expoTerm = do
       lhs <- term
       option lhs (BinOpExpr Exp lhs <$> (symbol "^" >> prefixTerm))
 

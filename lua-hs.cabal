@@ -14,7 +14,7 @@ common defaults
 
 library
     import: defaults
-    exposed-modules: Token, Parser
+    exposed-modules: Token, Parser, Interpreter
     build-depends:
         base,
         text,
@@ -22,7 +22,14 @@ library
         parser-combinators,
         scientific,
         FloatingHex,
-        bytestring
+        bytestring,
+        transformers,
+        hashtables,
+        hashable,
+        mtl,
+        containers,
+        vector,
+        judy
     hs-source-dirs: src
 
 executable lua-hs

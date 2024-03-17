@@ -20,14 +20,12 @@ import Data.Numbers.FloatingHex (readHFloat)
 import Data.Proxy (Proxy (Proxy))
 import Data.Scientific (Scientific, toRealFloat)
 import qualified Data.Scientific as Sci
-import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Internal.Builder (fromText)
 import Data.Void (Void)
-import Data.Word (Word32, Word8)
+import Data.Word (Word8)
 import GHC.Base (Alternative (some), getTag, unsafeChr)
-import GHC.Exts (Int#, chr#)
 import Numeric (readFloat, readHex)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (takeWhile1P), Parsec, anySingle, between, choice, lookAhead, many, manyTill, notFollowedBy, oneOf, option, optional, satisfy, skipMany, skipManyTill, takeWhileP, try, unexpected, (<?>), (<|>))
 import Text.Megaparsec.Char (char, char', digitChar, hexDigitChar, space1, string)
@@ -35,6 +33,7 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Error (ErrorItem (Tokens))
 import Text.Megaparsec.Stream (chunkToTokens)
 import Prelude hiding (exponent)
+import Data.Text (Text)
 
 type Lexer = Parsec Void Text
 
@@ -104,12 +103,10 @@ stringLit =
       if x == '\n'
         then xs
         else x : xs
-    getTag' :: Int -> Int#
-    getTag' = getTag
     codepointToUtf8 :: Int -> ByteString
     codepointToUtf8 = encodeUtf8 . T.singleton . unsafeChr
     hexStringToWord :: String -> Char
-    hexStringToWord = chr . fst . head . readHex
+    hexStringToWord = chr . fst . (!! 0) . readHex
 
 number :: Lexer (Either Int64 Double)
 number = do
@@ -135,7 +132,7 @@ number = do
         val <- digits' True
         return $ [e] ++ maybe "" (: []) sign ++ val
       let literal = concat ["0", whole, ".", frac, "0", exp]
-      return $ fst . head . readFloat $ literal
+      return $ fst . (!! 0) . readFloat $ literal
     hexfloat = do
       zerox <- try $ char '0' >> char' 'x' <&> \x -> "0" ++ [x]
       whole <- hexdigits' False

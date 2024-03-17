@@ -2,25 +2,27 @@
 
 module Main where
 
-import Parser (Parser, program, expr, Expr (..), UnOp (..), functioncall, exprlist)
-import Text.Megaparsec (parseTest, MonadParsec (eof, takeWhileP), try, runParser, errorBundlePretty, skipManyTill, tokens, anySingle, optional, skipMany, anySingleBut, some)
-import Text.Printf (printf)
-import Text.Megaparsec.Debug (dbg)
+import Control.Monad (filterM, foldM, unless, void, when)
+import Data.Either (isRight)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import Token (sc, symbol, number, stringLit)
-import Data.Either (isRight)
-import System.Directory (getDirectoryContents, listDirectory, doesFileExist, doesDirectoryExist)
-import Control.Monad (void, filterM, foldM, unless, when)
-import System.FilePath ((</>), takeExtension)
-import System.Directory.Internal.Prelude (exitFailure)
-import Text.Megaparsec.Char (string, char)
 import qualified GHC.IO.Device as T
+import Parser (Expr (..), Parser, UnOp (..), expr, exprlist, functioncall, program)
+import System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents, listDirectory)
+import System.Directory.Internal.Prelude (exitFailure)
+import System.FilePath (takeExtension, (</>))
+import Text.Megaparsec (MonadParsec (eof, takeWhileP), anySingle, anySingleBut, errorBundlePretty, optional, parseTest, runParser, skipMany, skipManyTill, some, tokens, try)
+import Text.Megaparsec.Char (char, string)
+import Text.Megaparsec.Debug (dbg)
+import Text.Printf (printf)
+import Token (number, sc, stringLit, symbol)
+import Interpreter (eval, emptyEnv)
+import Interpreter (runIOThrows)
 
 skipHash :: Parser a -> Parser a
 skipHash p = optional (char '#' *> skipMany (anySingleBut '\n')) *> p
 
-testParse :: Show a => Parser a -> String -> T.Text -> Bool -> IO Bool
+testParse :: (Show a) => Parser a -> String -> T.Text -> Bool -> IO Bool
 testParse parser name text verbose = do
   let result = runParser parser name text
   case result of
@@ -48,35 +50,81 @@ allFilesInRecursive dir = do
         then allFilesInRecursive path
         else pure [path]
 
-main :: IO ()
-main = do
-  -- ok <- testParse expr "e1" "-2^-2" True
-  -- ok <- testParse expr "e2" "-2^- - -2" True
-  -- ok <- testParse expr "e3" "2^2^3" True
-  -- results <- mapM (\ (n, s) -> testParse (number <* eof) n s True) [
-  --     ("i1", "3"),
-  --     ("i2", "345"),
-  --     ("i3", "0xff"),
-  --     ("i4", "0xBEBADA"),
-  --     ("i5", "0"),
-  --     ("f1", "3.0"),
-  --     ("f2", "3.1416"),
-  --     ("f3", "314.16e-2"),
-  --     ("f4", "0.31416E1"),
-  --     ("f5", "34e1"),
-  --     ("f6", "0x0.1E"),
-  --     ("f7", "0xA23p-4"),
-  --     ("f8", "0X1.921FB54442D18P+1"),
-  --     ("f9", ".4"),
-  --     ("f10", "0x0p12"),
-  --     ("f11", "0x.0p-3")
-  --   ]
-  -- ok <- testParse expr "f" "~~-1024.0" True
-  -- ok <- testParse expr "s" "'a\\z b'" True
-  -- ok <- testParse exprlist "s" "'testing scanner'" True
-  -- ok <- testParse functioncall "f" "print('testing scanner')" True
-  -- ok <- testParseFile "test/lua-5.4.6-tests/literals.lua"
+testParseAllFiles :: IO Bool
+testParseAllFiles = do
   luaFiles <- fmap (filter ((== ".lua") . takeExtension)) (allFilesInRecursive "test/")
   results <- mapM testParseFile luaFiles
-  let ok = foldl (||) True results
-  unless ok exitFailure
+  return $ foldl (||) True results
+
+testExponentiation :: IO Bool
+testExponentiation = do
+  results <-
+    sequence
+      [ testParse expr "e1" "-2^-2" True,
+        testParse expr "e2" "-2^- - -2" True,
+        testParse expr "e3" "2^2^3" True
+      ]
+  return $ foldl (||) True results
+
+testParseNumericalLiterals :: IO Bool
+testParseNumericalLiterals = do
+  results <-
+    mapM
+      (\(n, s) -> testParse (number <* eof) n s True)
+      [ ("i1", "3"),
+        ("i2", "345"),
+        ("i3", "0xff"),
+        ("i4", "0xBEBADA"),
+        ("i5", "0"),
+        ("f1", "3.0"),
+        ("f2", "3.1416"),
+        ("f3", "314.16e-2"),
+        ("f4", "0.31416E1"),
+        ("f5", "34e1"),
+        ("f6", "0x0.1E"),
+        ("f7", "0xA23p-4"),
+        ("f8", "0X1.921FB54442D18P+1"),
+        ("f9", ".4"),
+        ("f10", "0x0p12"),
+        ("f11", "0x.0p-3")
+      ]
+  return $ foldl (||) True results
+
+testParseWeirdStuff :: IO Bool
+testParseWeirdStuff = do
+  results <-
+    sequence
+      [ testParse expr "f" "~~-1024.0" True,
+        testParse expr "s" "'a\\z b'" True,
+        testParse exprlist "s" "'testing scanner'" True,
+        testParse functioncall "f" "print('testing scanner')" True
+      ]
+  return $ foldl (||) True results
+
+runParserAndEval :: T.Text -> IO Bool
+runParserAndEval text = do
+  let result = runParser expr "expr" text
+  case result of
+    Left err -> do
+      putStr $ errorBundlePretty err
+      return False
+    Right expr -> do
+      env <- emptyEnv
+      result <- runIOThrows $ fmap show $ eval env expr
+      putStrLn result
+      return True
+
+
+main :: IO ()
+main = do
+  -- ok <- testParseFile "test/lua-5.4.6-tests/literals.lua"
+  -- ok <- testParseAllFiles
+  -- unless ok exitFailure
+  env <- emptyEnv
+  _ <- runParserAndEval "2 + 2 + 2"
+  _ <- runParserAndEval "'concat:' .. 1 .. 1.0"
+  _ <- runParserAndEval "'concat:' .. nil"
+  _ <- runParserAndEval "'concat:' .. true"
+  _ <- runParserAndEval "'concat:' .. {}"
+  return ()
+
