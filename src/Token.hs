@@ -20,11 +20,13 @@ import Data.Numbers.FloatingHex (readHFloat)
 import Data.Proxy (Proxy (Proxy))
 import Data.Scientific (Scientific, toRealFloat)
 import qualified Data.Scientific as Sci
+import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Internal.Builder (fromText)
 import Data.Void (Void)
 import Data.Word (Word8)
+import Debug.Trace (trace)
 import GHC.Base (Alternative (some), getTag, unsafeChr)
 import Numeric (readFloat, readHex)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (takeWhile1P), Parsec, anySingle, between, choice, lookAhead, many, manyTill, notFollowedBy, oneOf, option, optional, satisfy, skipMany, skipManyTill, takeWhileP, try, unexpected, (<?>), (<|>))
@@ -33,7 +35,6 @@ import qualified Text.Megaparsec.Char.Lexer as L
 import Text.Megaparsec.Error (ErrorItem (Tokens))
 import Text.Megaparsec.Stream (chunkToTokens)
 import Prelude hiding (exponent)
-import Data.Text (Text)
 
 type Lexer = Parsec Void Text
 
@@ -131,10 +132,10 @@ number = do
         sign <- optional $ satisfy (\c -> c == '+' || c == '-')
         val <- digits' True
         return $ [e] ++ maybe "" (: []) sign ++ val
-      let literal = concat ["0", whole, ".", frac, "0", exp]
+      let literal = concat [nonEmptyOr whole "0", nonEmptyOr frac ".0", exp]
       return $ fst . (!! 0) . readFloat $ literal
     hexfloat = do
-      zerox <- try $ char '0' >> char' 'x' <&> \x -> "0" ++ [x]
+      ox <- try $ char '0' >> char' 'x' <&> \x -> "0" ++ [x]
       whole <- hexdigits' False
       frac <- option "" $ liftA2 (:) (char '.') (hexdigits' $ null whole)
       exp <- option "p0" $ do
@@ -142,7 +143,7 @@ number = do
         sign <- optional $ satisfy (\c -> c == '+' || c == '-')
         val <- digits' True
         return $ [p] ++ maybe "" (: []) sign ++ val
-      let literal = concat [zerox, whole, frac, exp]
+      let literal = concat [ox, whole, frac, exp]
       case readHFloat literal of
         Nothing -> unexpected $ Tokens $ fromList literal
         Just f -> return f
@@ -152,6 +153,7 @@ number = do
     hexdigits' atLeast1 =
       T.unpack
         <$> (if atLeast1 then takeWhile1P else takeWhileP) (Just "hex digit") isHexDigit
+    nonEmptyOr a b = if null a then b else a
 
 boolean :: Lexer Bool
 boolean = (False <$ lexeme "false") <|> (True <$ lexeme "true")

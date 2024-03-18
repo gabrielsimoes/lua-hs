@@ -279,32 +279,23 @@ data Expr
   deriving (Show, Eq)
 
 data BinOp
-  = -- arithmetic
-    Add
-  | Sub
-  | Mul
-  | Div
-  | FloorDiv
-  | Mod
-  | Exp
-  | -- string
-    Concat
-  | -- relational
-    Lt
-  | Lte
-  | Gt
-  | Gte
-  | Eq
-  | Neq
-  | -- logical
-    And
-  | Or
-  | -- bitwise
-    BitAnd
-  | BitOr
-  | BitXor
-  | BitRightShift
-  | BitLeftShift
+  = ArithBinOp ArithBinOp
+  | ConcatBinOp
+  | RelationalBinOp RelationalBinOp
+  | LogicalBinOp LogicalBinOp
+  | BitwiseBinOp BitwiseBinOp
+  deriving (Show, Eq)
+
+data ArithBinOp = Add | Sub | Mul | Div | FloorDiv | Mod | Pow
+  deriving (Show, Eq)
+
+data RelationalBinOp = Lt | Lte | Gt | Gte | Eq | Neq
+  deriving (Show, Eq)
+
+data LogicalBinOp = And | Or
+  deriving (Show, Eq)
+
+data BitwiseBinOp = BitAnd | BitOr | BitXor | BitLeftShift | BitRightShift
   deriving (Show, Eq)
 
 data UnOp = Neg | BitNot | Not | Len
@@ -326,7 +317,7 @@ expr = infixTerm
     -- exponentiation '^', right-associative
     expoTerm = do
       lhs <- term
-      option lhs (BinOpExpr Exp lhs <$> (symbol "^" >> prefixTerm))
+      option lhs (BinOpExpr (ArithBinOp Pow) lhs <$> (symbol "^" >> prefixTerm))
 
     -- remaining expression types
     term =
@@ -361,31 +352,31 @@ expr = infixTerm
       ]
     infixOpTable :: [[Operator Parser Expr]]
     infixOpTable =
-      [ [ infixL "*" Mul,
-          infixL' "/" (char '/') Div,
-          infixL "//" FloorDiv,
-          infixL "%" Mod
+      [ [ infixL "*" (ArithBinOp Mul),
+          infixL' "/" (char '/') (ArithBinOp Div),
+          infixL "//" (ArithBinOp FloorDiv),
+          infixL "%" (ArithBinOp Mod)
         ],
-        [ infixL "+" Add,
-          infixL "-" Sub
+        [ infixL "+" (ArithBinOp Add),
+          infixL "-" (ArithBinOp Sub)
         ],
-        [infixR' ".." (char '.') Concat],
-        [ infixL "<<" BitRightShift,
-          infixL ">>" BitLeftShift
+        [infixR' ".." (char '.') ConcatBinOp],
+        [ infixL "<<" (BitwiseBinOp BitRightShift),
+          infixL ">>" (BitwiseBinOp BitLeftShift)
         ],
-        [infixL "&" BitAnd],
-        [infixL' "~" (char '=') BitXor],
-        [infixL "|" BitOr],
-        [ infixL' "<" (oneOf ['=', '<']) Lt,
-          infixL' ">" (oneOf ['=', '>']) Gt,
-          infixL "<=" Lte,
-          infixL ">=" Gte,
-          infixL "~=" Neq,
-          infixL "==" Eq
+        [infixL "&" (BitwiseBinOp BitAnd)],
+        [infixL' "~" (char '=') (BitwiseBinOp BitXor)],
+        [infixL "|" (BitwiseBinOp BitOr)],
+        [ infixL' "<" (oneOf ['=', '<']) (RelationalBinOp Lt),
+          infixL' ">" (oneOf ['=', '>']) (RelationalBinOp Gt),
+          infixL "<=" (RelationalBinOp Lte),
+          infixL ">=" (RelationalBinOp Gte),
+          infixL "~=" (RelationalBinOp Neq),
+          infixL "==" (RelationalBinOp Eq)
         ],
-        [ infixL "and" And
+        [ infixL "and" (LogicalBinOp And)
         ],
-        [infixL "or" Or]
+        [infixL "or" (LogicalBinOp Or)]
       ]
 
     unary sym unop =

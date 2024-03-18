@@ -14,7 +14,7 @@ common defaults
 
 library
     import: defaults
-    exposed-modules: Token, Parser, Interpreter
+    exposed-modules: Token, Parser, Interpreter, Values
     build-depends:
         base,
         text,
@@ -51,4 +51,5 @@ test-suite lua-hs-test
         megaparsec,
         directory,
         filepath,
+        process,
         lua-hs

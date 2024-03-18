@@ -16,8 +16,9 @@ import Text.Megaparsec.Char (char, string)
 import Text.Megaparsec.Debug (dbg)
 import Text.Printf (printf)
 import Token (number, sc, stringLit, symbol)
-import Interpreter (eval, emptyEnv)
-import Interpreter (runIOThrows)
+import Interpreter (evalRepr, emptyEnv, evalRepr, runIOThrows)
+import System.Process (readProcess, readProcessWithExitCode)
+import Values (repr)
 
 skipHash :: Parser a -> Parser a
 skipHash p = optional (char '#' *> skipMany (anySingleBut '\n')) *> p
@@ -103,16 +104,19 @@ testParseWeirdStuff = do
 
 runParserAndEval :: T.Text -> IO Bool
 runParserAndEval text = do
-  let result = runParser expr "expr" text
-  case result of
+  let parseResult = runParser expr (T.unpack text) text
+  case parseResult of
     Left err -> do
-      putStr $ errorBundlePretty err
+      putStrLn $ T.unpack text ++ " " ++ (errorBundlePretty err)
       return False
     Right expr -> do
       env <- emptyEnv
-      result <- runIOThrows $ fmap show $ eval env expr
-      putStrLn result
+      result <- runIOThrows $ evalRepr env expr
+      (luaExit, luaStdout, luaStderr) <- readProcessWithExitCode "lua" ["-e", "print(" ++ T.unpack text ++ ")"] ""
+      putStrLn $ T.unpack text ++ "=\n" ++ result ++ "\n" ++ (firstLine (luaStdout ++ luaStderr))
       return True
+  where
+    firstLine s = takeWhile (/= '\n') s
 
 
 main :: IO ()
@@ -122,9 +126,25 @@ main = do
   -- unless ok exitFailure
   env <- emptyEnv
   _ <- runParserAndEval "2 + 2 + 2"
-  _ <- runParserAndEval "'concat:' .. 1 .. 1.0"
-  _ <- runParserAndEval "'concat:' .. nil"
-  _ <- runParserAndEval "'concat:' .. true"
-  _ <- runParserAndEval "'concat:' .. {}"
+  _ <- runParserAndEval "(2 * 2) // 2"
+  _ <- runParserAndEval "(2 * 2) / 2"
+  _ <- runParserAndEval "5.1 // 0.19"
+  _ <- runParserAndEval "5 // 0.19"
+  _ <- runParserAndEval "-5 / 0.0"
+  _ <- runParserAndEval "-5 // 0.0"
+  _ <- runParserAndEval "-5 / 0"
+  _ <- runParserAndEval "5 / 0"
+  _ <- runParserAndEval "0 / 0"
+  _ <- runParserAndEval "-(0 / 0)"
+  _ <- runParserAndEval "-5 % 2"
+  _ <- runParserAndEval "-5 // 0"
+  _ <- runParserAndEval "-5.0 % 2"
+  _ <- runParserAndEval "2 ^ 3"
+  _ <- runParserAndEval "'concat: ' .. 1 .. ' ' .. 1.0"
+  _ <- runParserAndEval "'concat: ' .. nil"
+  _ <- runParserAndEval "'concat: ' .. true"
+  _ <- runParserAndEval "'concat: ' .. {}"
+  _ <- runParserAndEval "{}"
+  _ <- runParserAndEval "{1, ['some' .. '-' .. 'key'] = 'value', 2, foo = 'bar', [3] = 3, [2 * 2 * 2] = 8}"
   return ()
 
